@@ -1,17 +1,13 @@
-// scripts/generate-risk.ts
-import fs from "fs";
-import path from "path";
+import { NextRequest, NextResponse } from 'next/server';
 import { ChatOpenAI } from "@langchain/openai";
-import { createSingleRunGraph } from "@langchain/langgraph";
+import { 
+  initializeMoralis, 
+  getComprehensiveWalletAnalysis, 
+  formatWalletAnalysisForRisk,
+  type WalletAnalysis 
+} from '@/lib/moralis-wallet-analyzer';
 
-const model = new ChatOpenAI({ modelName: "gpt-4" });
-
-const wallets = [
-  "0x7a29aE65Bf25Dfb6e554BF0468a6c23ed99a8DC2",
-  "0x3feC8fd95b122887551c19c73F6b2bbf445B8C87",
-  "0x38e247893BbC8517a317c54Ed34F9C62cb5F26c0",
-  "0x51db92258a3ab0f81de0feab5d59a77e49b57275",
-];
+const model = new ChatOpenAI({ modelName: "gpt-4", temperature: 0 });
 
 const systemPrompt = `
 You're a blockchain risk analyst. Based on the onchain activity I give you, output a JSON object with the following schema:
@@ -26,67 +22,108 @@ You're a blockchain risk analyst. Based on the onchain activity I give you, outp
   "final_notes": "..."
 }
 
+Risk scoring guidelines:
+- 0-20: Very Low Risk (established wallets, diversified holdings, no red flags)
+- 21-40: Low Risk (good activity history, minor concerns)
+- 41-60: Medium Risk (some concerns, limited history, or concentrated holdings)
+- 61-80: High Risk (multiple red flags, suspicious activity, or high concentration)
+- 81-100: Very High Risk (severe red flags, mixer usage, or highly suspicious patterns)
+
 Do not repeat the raw input — use it only to reason and output insights.
+Return only the JSON, nothing else.
 `;
 
-async function run() {
-  for (const address of wallets) {
-    const walletInput = await getMockWalletContext(address);
+export async function POST(request: NextRequest) {
+  try {
+    const { address } = await request.json();
 
-    const graph = await createSingleRunGraph({
-      steps: [
-        {
-          id: "generateRisk",
-          func: model.bind({
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: walletInput },
-            ],
-          }),
-        },
-      ],
-      entryPoint: "generateRisk",
-    });
+    if (!address) {
+      return NextResponse.json(
+        { error: 'Wallet address is required' },
+        { status: 400 }
+      );
+    }
 
-    const result = await graph.invoke();
+    // Validate Ethereum address format
+    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+      return NextResponse.json(
+        { error: 'Invalid Ethereum address format' },
+        { status: 400 }
+      );
+    }
 
-    const jsonStr = result.output?.content;
-    const filename = path.join(
-      process.cwd(),
-      "public",
-      "static",
-      "risk",
-      `${address}.json`,
+    // Initialize Moralis
+    const apiKey = process.env.MORALIS_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: 'Moralis API key not configured' },
+        { status: 500 }
+      );
+    }
+
+    await initializeMoralis(apiKey);
+
+    // Get comprehensive wallet analysis
+    console.log(`🔍 Analyzing wallet: ${address}`);
+    const walletAnalysis = await getComprehensiveWalletAnalysis(address);
+    
+    // Format for AI analysis
+    const formattedAnalysis = formatWalletAnalysisForRisk(walletAnalysis);
+
+    // Get AI risk assessment
+    const aiResponse = await model.invoke([
+      { role: "system", content: systemPrompt },
+      { role: "user", content: formattedAnalysis },
+    ]);
+
+    let riskAssessment;
+    try {
+      riskAssessment = JSON.parse(aiResponse.content as string);
+    } catch (parseError) {
+      console.error('Failed to parse AI response:', aiResponse.content);
+      return NextResponse.json(
+        { error: 'Failed to generate risk assessment' },
+        { status: 500 }
+      );
+    }
+
+    // Combine the raw analysis with AI assessment
+    const response = {
+      ...riskAssessment,
+      raw_analysis: walletAnalysis,
+      analysis_timestamp: new Date().toISOString(),
+    };
+
+    console.log(`✅ Risk analysis completed for ${address}`);
+    return NextResponse.json(response);
+
+  } catch (error) {
+    console.error('Error in risk analysis:', error);
+    return NextResponse.json(
+      { 
+        error: 'Failed to analyze wallet risk',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      },
+      { status: 500 }
     );
-    fs.mkdirSync(path.dirname(filename), { recursive: true });
-    fs.writeFileSync(filename, jsonStr, "utf8");
-
-    console.log(`✅ Wrote risk file for ${address}`);
   }
 }
 
-async function getMockWalletContext(address: string): Promise<string> {
-  return `
-Wallet address: ${address}
+export async function GET(request: NextRequest) {
+  const { searchParams } = new URL(request.url);
+  const address = searchParams.get('address');
 
-Assets Held:
-- USDC: 1200
-- PEPE: 800000
-- SHADYDAO: 500
+  if (!address) {
+    return NextResponse.json(
+      { error: 'Wallet address parameter is required' },
+      { status: 400 }
+    );
+  }
 
-Protocols Used:
-- Aave v3: supplied USDC
-- SushiSwap: provided LP in PEPE/USDC
-- RugSwap: staked SHADYDAO
-
-Pools:
-- USDC/PEPE (SushiSwap)
-- SHADYDAO/ETH (RugSwap)
-
-Tx Count (30d): 72
-Contract Interactions: Yes
-Tornado Cash Activity: No
-`.trim();
+  // Convert GET to POST call internally
+  return POST(new NextRequest(request.url, {
+    method: 'POST',
+    body: JSON.stringify({ address }),
+    headers: { 'Content-Type': 'application/json' }
+  }));
 }
-
-run();
