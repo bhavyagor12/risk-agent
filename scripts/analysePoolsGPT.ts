@@ -303,7 +303,7 @@ Respond with valid JSON only:
 
       const response = completion.choices[0]?.message?.content;
       if (!response) {
-        throw new Error('No response from GPT');
+        throw new Error('No response from GPT while analyzing pools');
       }
 
       const analysis = JSON.parse(response);
