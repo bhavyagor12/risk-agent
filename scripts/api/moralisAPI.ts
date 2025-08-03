@@ -1,66 +1,20 @@
 import axios from 'axios';
 
+// Flexible interfaces to capture all Moralis data without restrictions
 export interface MoralisTokenBalance {
-  token_address: string;
-  name: string;
-  symbol: string;
-  logo?: string;
-  thumbnail?: string;
-  decimals: number;
-  balance: string;
-  possible_spam: boolean;
-  verified_contract: boolean;
-  total_supply?: string;
-  total_supply_formatted?: string;
-  percentage_relative_to_total_supply?: number;
+  [key: string]: any; // Allow any additional fields from Moralis
 }
 
 export interface MoralisTransaction {
-  hash: string;
-  nonce: string;
-  transaction_index: string;
-  from_address: string;
-  to_address: string;
-  value: string;
-  gas: string;
-  gas_price: string;
-  gas_used: string;
-  cumulative_gas_used: string;
-  input: string;
-  receipt_cumulative_gas_used: string;
-  receipt_gas_used: string;
-  receipt_contract_address?: string;
-  receipt_root?: string;
-  receipt_status: string;
-  block_timestamp: string;
-  block_number: string;
-  block_hash: string;
-  transfer_index: number[];
-  logs: any[];
+  [key: string]: any; // Allow any additional fields from Moralis
 }
 
 export interface MoralisNativeBalance {
-  balance: string;
-  balance_formatted: string;
+  [key: string]: any; // Allow any additional fields from Moralis
 }
 
 export interface MoralisDefiPosition {
-  protocol_name: string;
-  protocol_id: string;
-  protocol_url?: string;
-  protocol_logo?: string;
-  total_usd_value: number;
-  position_details: Array<{
-    address: string;
-    name: string;
-    symbol: string;
-    decimals: number;
-    balance: string;
-    balance_formatted: string;
-    usd_price: number;
-    usd_value: number;
-    portfolio_percentage: number;
-  }>;
+  [key: string]: any; // Allow any additional fields from Moralis
 }
 
 export class MoralisAPI {
@@ -93,13 +47,14 @@ export class MoralisAPI {
   /**
    * Fetch native ETH balance
    */
-  async getNativeBalance(address: string, chain: string = 'eth'): Promise<MoralisNativeBalance> {
+  async getNativeBalance(address: string, chain: string = 'eth'): Promise<any> {
     console.log(`💰 Fetching native balance for ${address} from Moralis...`);
 
     try {
       const data = await this.makeRequest(`/${address}/balance`, { chain });
+      // Store raw data plus computed field
       return {
-        balance: data.balance,
+        ...data, // Keep all original Moralis data
         balance_formatted: (parseFloat(data.balance) / 1e18).toFixed(6)
       };
     } catch (error) {
@@ -114,7 +69,7 @@ export class MoralisAPI {
   /**
    * Fetch ERC20 token balances
    */
-  async getTokenBalances(address: string, chain: string = 'eth'): Promise<MoralisTokenBalance[]> {
+  async getTokenBalances(address: string, chain: string = 'eth'): Promise<any[]> {
     console.log(`🪙 Fetching token balances for ${address} from Moralis...`);
 
     try {
@@ -124,7 +79,8 @@ export class MoralisAPI {
         exclude_unverified_contracts: false
       });
 
-      return data.result || [];
+      // Return raw Moralis data without filtering
+      return data || [];
     } catch (error) {
       console.warn('Could not fetch token balances from Moralis');
       return [];
@@ -134,7 +90,7 @@ export class MoralisAPI {
   /**
    * Fetch transaction history
    */
-  async getTransactions(address: string, chain: string = 'eth', limit = 100): Promise<MoralisTransaction[]> {
+  async getTransactions(address: string, chain: string = 'eth', limit = 100): Promise<any[]> {
     console.log(`📜 Fetching transactions for ${address} from Moralis...`);
 
     try {
@@ -144,7 +100,8 @@ export class MoralisAPI {
         order: 'DESC'
       });
 
-      return data.result || [];
+      // Return raw Moralis data
+      return data || [];
     } catch (error) {
       console.warn('Could not fetch transactions from Moralis');
       return [];
@@ -154,14 +111,15 @@ export class MoralisAPI {
   /**
    * Fetch DeFi positions (if available in Moralis plan)
    */
-  async getDefiPositions(address: string, chain: string = 'eth'): Promise<MoralisDefiPosition[]> {
+  async getDefiPositions(address: string, chain: string = 'eth'): Promise<any[]> {
     console.log(`🏦 Fetching DeFi positions for ${address} from Moralis...`);
 
     try {
       // This endpoint might not be available in all Moralis plans
       const data = await this.makeRequest(`/wallets/${address}/defi/positions`, { chain });
       console.log(data, "defi positions");
-      return data.result || [];
+      // Return raw Moralis data
+      return data || [];
     } catch (error) {
       console.warn('Could not fetch DeFi positions from Moralis (might not be available in current plan)');
       return [];
@@ -211,7 +169,7 @@ export class MoralisAPI {
   /**
    * Get wallet's net worth across multiple chains
    */
-  async getNetWorth(address: string, chains: string[] = ['eth', 'polygon', 'arbitrum', 'base', 'optimism', 'linea']): Promise<{ total_networth_usd: string; chains: any[] }> {
+  async getNetWorth(address: string, chains: string[] = ['eth', 'polygon', 'arbitrum', 'base', 'optimism', 'linea']): Promise<any> {
     console.log(`💎 Fetching net worth for ${address} from Moralis across chains: ${chains.join(', ')}...`);
 
     try {
@@ -223,7 +181,8 @@ export class MoralisAPI {
         min_pair_side_liquidity_usd: 1000
       });
 
-      return data;
+      // Return raw Moralis data
+      return data || {};
     } catch (error) {
       console.warn('Could not fetch net worth from Moralis');
       return {
@@ -311,15 +270,7 @@ export class MoralisAPI {
   /**
    * Get comprehensive wallet portfolio data (Zerion-like functionality)
    */
-  async getWalletPortfolio(address: string, chain: string = 'eth'): Promise<{
-    totalValue: number;
-    nativeBalance: any;
-    tokenBalances: MoralisTokenBalance[];
-    nftBalances: any[];
-    defiPositions: MoralisDefiPosition[];
-    netWorth: any;
-    profitLoss: any;
-  }> {
+  async getWalletPortfolio(address: string, chain: string = 'eth'): Promise<any> {
     console.log(`📊 Fetching comprehensive portfolio for ${address} from Moralis...`);
 
     try {
@@ -340,15 +291,16 @@ export class MoralisAPI {
         this.getProfitAndLoss(address, chain)
       ]);
 
-      // Calculate total value
-      const nativeValue = parseFloat(nativeBalance.balance_formatted) * 1800; // Rough ETH price
-      const tokenValues = tokenBalances.reduce((sum, token) => {
+      // Calculate total value (keep for backward compatibility)
+      const nativeValue = parseFloat(nativeBalance.balance_formatted || '0') * 1800; // Rough ETH price
+      const tokenValues = ((tokenBalances as any)?.result || tokenBalances || []).reduce((sum: number, token: any) => {
         // This would need token price data, simplified for now
-        return sum + parseFloat(token.balance) / Math.pow(10, token.decimals);
+        return sum + parseFloat(token.balance || '0') / Math.pow(10, token.decimals || 18);
       }, 0);
       
-      const totalValue = parseFloat(netWorth.total_networth_usd) || (nativeValue + tokenValues);
+      const totalValue = parseFloat(netWorth.total_networth_usd || '0') || (nativeValue + tokenValues);
 
+      // Return all raw data plus computed values
       return {
         totalValue,
         nativeBalance,
@@ -356,7 +308,16 @@ export class MoralisAPI {
         nftBalances,
         defiPositions,
         netWorth,
-        profitLoss
+        profitLoss,
+        // Store all raw responses
+        rawResponses: {
+          nativeBalance,
+          tokenBalances,
+          nftBalances,
+          defiPositions,
+          netWorth,
+          profitLoss
+        }
       };
     } catch (error) {
       console.warn('Could not fetch comprehensive portfolio from Moralis');
@@ -367,9 +328,133 @@ export class MoralisAPI {
         nftBalances: [],
         defiPositions: [],
         netWorth: { total_networth_usd: '0', chains: [] },
-        profitLoss: { total_usd_value: 0, total_usd_value_change: 0, total_percentage_change: 0 }
+        profitLoss: { total_usd_value: 0, total_usd_value_change: 0, total_percentage_change: 0 },
+        rawResponses: {}
       };
     }
+  }
+  /**
+   * Get wallet profitability (PNL) - specific endpoint
+   */
+  async getWalletProfitability(address: string, chain: string = 'eth'): Promise<any> {
+    console.log(`📊 Fetching profitability for ${address} from Moralis...`);
+
+    try {
+      const data = await this.makeRequest(`/wallets/${address}/profitability`, { chain });
+      return data;
+    } catch (error) {
+      console.warn('Could not fetch profitability from Moralis');
+      return {
+        total_count_of_trades: 0,
+        total_realized_profit_usd: 0,
+        total_unrealized_profit_usd: 0,
+        total_profit_usd: 0,
+        total_realized_profit_percentage: 0,
+        total_unrealized_profit_percentage: 0,
+        total_profit_percentage: 0
+      };
+    }
+  }
+
+  /**
+   * Get DeFi summary/protocols
+   */
+  async getDefiSummary(address: string, chain: string = 'eth'): Promise<any> {
+    console.log(`🏛️ Fetching DeFi summary for ${address} from Moralis...`);
+
+    try {
+      const data = await this.makeRequest(`/wallets/${address}/defi/summary`, { chain });
+      return data;
+    } catch (error) {
+      console.warn('Could not fetch DeFi summary from Moralis');
+      return {
+        total_usd_value: 0,
+        protocols: []
+      };
+    }
+  }
+
+  /**
+   * Get wallet swaps - specific swaps endpoint
+   */
+  async getWalletSwaps(address: string, chain: string = 'eth', limit: number = 100): Promise<any[]> {
+    console.log(`🔄 Fetching swaps for ${address} from Moralis...`);
+
+    try {
+      const data = await this.makeRequest(`/wallets/${address}/swaps`, {
+        chain,
+        limit,
+        order: 'DESC'
+      });
+
+      return data.result || [];
+    } catch (error) {
+      console.warn('Could not fetch swaps from Moralis');
+      return [];
+    }
+  }
+
+  /**
+   * Get wallet token approvals - specific approvals endpoint
+   */
+  async getWalletApprovals(address: string, chain: string = 'eth', limit: number = 100): Promise<any[]> {
+    console.log(`✅ Fetching approvals for ${address} from Moralis...`);
+
+    try {
+      const data = await this.makeRequest(`/wallets/${address}/approvals`, {
+        chain,
+        limit
+      });
+
+      return data.result || [];
+    } catch (error) {
+      console.warn('Could not fetch approvals from Moralis');
+      return [];
+    }
+  }
+
+  /**
+   * Get comprehensive wallet data across multiple chains
+   */
+  async getComprehensiveWalletData(address: string, chains: string[] = ['eth', 'polygon', 'base']): Promise<any> {
+    console.log(`🌐 Fetching comprehensive wallet data for ${address} across chains: ${chains.join(', ')}...`);
+
+    const results: any = {
+      address,
+      chains: {}
+    };
+
+    // Fetch data for each chain in parallel
+    for (const chain of chains) {
+      try {
+        const [profitability, defiPositions, defiSummary, swaps, approvals] = await Promise.all([
+          this.getWalletProfitability(address, chain),
+          this.getDefiPositions(address, chain),
+          this.getDefiSummary(address, chain),
+          this.getWalletSwaps(address, chain, 100),
+          this.getWalletApprovals(address, chain, 100)
+        ]);
+
+        results.chains[chain] = {
+          profitability,
+          defiPositions,
+          defiSummary,
+          swaps,
+          approvals
+        };
+      } catch (error) {
+        console.warn(`Error fetching data for chain ${chain}:`, error);
+        results.chains[chain] = {
+          profitability: {},
+          defiPositions: [],
+          defiSummary: {},
+          swaps: [],
+          approvals: []
+        };
+      }
+    }
+
+    return results;
   }
 }
 

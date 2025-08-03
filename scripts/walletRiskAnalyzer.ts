@@ -208,24 +208,40 @@ export class WalletRiskAnalyzer {
       // Extract chain-specific net worth data from multi-chain response
       const ethNetWorth = {
         total_networth_usd: multiChainNetWorth.total_networth_usd,
-        chains: multiChainNetWorth.chains?.filter(chain => chain.chain === 'eth' || chain.chain === 'ethereum') || []
+        chains: multiChainNetWorth.chains?.filter((chain: any) => chain.chain === 'eth' || chain.chain === 'ethereum') || []
       };
       
       const baseNetWorth = {
         total_networth_usd: multiChainNetWorth.total_networth_usd,
-        chains: multiChainNetWorth.chains?.filter(chain => chain.chain === 'base') || []
+        chains: multiChainNetWorth.chains?.filter((chain: any) => chain.chain === 'base') || []
       };
       
       const polygonNetWorth = {
         total_networth_usd: multiChainNetWorth.total_networth_usd,
-        chains: multiChainNetWorth.chains?.filter(chain => chain.chain === 'polygon') || []
+        chains: multiChainNetWorth.chains?.filter((chain: any) => chain.chain === 'polygon') || []
       };
 
       // Calculate combined metrics
       const totalNetWorth = parseFloat(multiChainNetWorth.total_networth_usd || '0');
 
-      // Store comprehensive Moralis multi-chain data
+      // Store ALL raw Moralis data without type filtering
       await this.dataManager.updateRawData(address, 'moralis', {
+        // Store all raw API responses directly
+        raw_ethereum_portfolio: ethPortfolio,
+        raw_ethereum_transactions: ethTransactions,
+        raw_ethereum_token_balances: ethTokenBalances,
+        raw_ethereum_native_balance: ethNativeBalance,
+        raw_ethereum_defi_positions: ethDefiPositions,
+        raw_ethereum_profit_loss: ethProfitLoss,
+        raw_base_token_balances: baseTokenBalances,
+        raw_base_native_balance: baseNativeBalance,
+        raw_base_defi_positions: baseDefiPositions,
+        raw_polygon_token_balances: polygonTokenBalances,
+        raw_polygon_native_balance: polygonNativeBalance,
+        raw_polygon_defi_positions: polygonDefiPositions,
+        raw_multi_chain_net_worth: multiChainNetWorth,
+        
+        // Keep backward compatibility structure too
         ethereum: {
           portfolio: ethPortfolio,
           net_worth: ethNetWorth,
@@ -250,14 +266,14 @@ export class WalletRiskAnalyzer {
         combined_metrics: {
           total_net_worth_usd: totalNetWorth,
           total_chains_active: [
-            ethTokenBalances.length > 0 || parseFloat(ethNativeBalance.balance_formatted) > 0 ? 'ethereum' : null,
-            baseTokenBalances.length > 0 || parseFloat(baseNativeBalance.balance_formatted) > 0 ? 'base' : null,
-            polygonTokenBalances.length > 0 || parseFloat(polygonNativeBalance.balance_formatted) > 0 ? 'polygon' : null
+            (ethTokenBalances as any)?.result?.length > 0 || parseFloat(ethNativeBalance?.balance_formatted || '0') > 0 ? 'ethereum' : null,
+            (baseTokenBalances as any)?.result?.length > 0 || parseFloat(baseNativeBalance?.balance_formatted || '0') > 0 ? 'base' : null,
+            (polygonTokenBalances as any)?.result?.length > 0 || parseFloat(polygonNativeBalance?.balance_formatted || '0') > 0 ? 'polygon' : null
           ].filter(Boolean).length,
           chains_with_activity: [
-            ethTokenBalances.length > 0 || parseFloat(ethNativeBalance.balance_formatted) > 0 ? 'ethereum' : null,
-            baseTokenBalances.length > 0 || parseFloat(baseNativeBalance.balance_formatted) > 0 ? 'base' : null,
-            polygonTokenBalances.length > 0 || parseFloat(polygonNativeBalance.balance_formatted) > 0 ? 'polygon' : null
+            (ethTokenBalances as any)?.result?.length > 0 || parseFloat(ethNativeBalance?.balance_formatted || '0') > 0 ? 'ethereum' : null,
+            (baseTokenBalances as any)?.result?.length > 0 || parseFloat(baseNativeBalance?.balance_formatted || '0') > 0 ? 'base' : null,
+            (polygonTokenBalances as any)?.result?.length > 0 || parseFloat(polygonNativeBalance?.balance_formatted || '0') > 0 ? 'polygon' : null
           ].filter(Boolean)
         }
       });
@@ -347,16 +363,21 @@ export class WalletRiskAnalyzer {
       for (const chain of chains) {
         const chainData = moralisData[chain];
         if (chainData) {
-          const hasActivity = (chainData.token_balances?.length > 0) || 
-                             (parseFloat(chainData.native_balance?.balance_formatted || '0') > 0);
+          // Handle both old and new flexible data structures
+          const tokenBalances = chainData.token_balances?.result || chainData.token_balances || [];
+          const nativeBalance = chainData.native_balance || {};
+          const defiPositions = chainData.defi_positions?.result || chainData.defi_positions || [];
+          
+          const hasActivity = (tokenBalances.length > 0) || 
+                             (parseFloat(nativeBalance.balance_formatted || '0') > 0);
           
           if (hasActivity) {
             moralisChainsAnalyzed.push(chain);
             chainBreakdown[chain] = {
               netWorth: parseFloat(chainData.net_worth?.total_networth_usd || '0'),
-              tokenCount: chainData.token_balances?.length || 0,
-              nativeBalance: chainData.native_balance?.balance_formatted || '0',
-              defiPositions: chainData.defi_positions?.length || 0,
+              tokenCount: tokenBalances.length || 0,
+              nativeBalance: nativeBalance.balance_formatted || '0',
+              defiPositions: defiPositions.length || 0,
               hasActivity: true
             };
           }

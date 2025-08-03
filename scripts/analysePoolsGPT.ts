@@ -117,33 +117,52 @@ class PoolAnalyzer {
    * Transform existing wallet data to expected format for pool analysis
    */
   private transformExistingDataForPoolAnalysis(moralisRawData: any) {
-    const ethDefiPositions = moralisRawData.ethereum?.defi_positions || [];
-    const baseDefiPositions = moralisRawData.base?.defi_positions || [];
-    const polygonDefiPositions = moralisRawData.polygon?.defi_positions || [];
-    const ethPortfolioDefi = moralisRawData.ethereum?.portfolio?.defiPositions || [];
+    // Handle flexible data structure - try both raw API data and processed data
+    const getDefiPositions = (chain: string) => {
+      return moralisRawData[`raw_${chain}_defi_positions`]?.result || 
+             moralisRawData[`raw_${chain}_defi_positions`] || 
+             moralisRawData[chain]?.defi_positions?.result || 
+             moralisRawData[chain]?.defi_positions || 
+             [];
+    };
 
-    // Calculate total DeFi value across all chains
+    const getPortfolioDefi = (chain: string = 'ethereum') => {
+      return moralisRawData[`raw_${chain}_portfolio`]?.defiPositions ||
+             moralisRawData[`raw_${chain}_portfolio`]?.rawResponses?.defiPositions ||
+             moralisRawData[chain]?.portfolio?.defiPositions || 
+             [];
+    };
+
+    const ethDefiPositions = getDefiPositions('ethereum');
+    const baseDefiPositions = getDefiPositions('base');
+    const polygonDefiPositions = getDefiPositions('polygon');
+    const ethPortfolioDefi = getPortfolioDefi('ethereum');
+
+    // Calculate total DeFi value across all chains with flexible data handling
     const totalDefiValue = [
       ...ethDefiPositions,
       ...baseDefiPositions,
       ...polygonDefiPositions
-    ].reduce((sum, pos) => sum + (pos.total_usd_value || 0), 0);
+    ].reduce((sum, pos) => sum + (pos?.total_usd_value || pos?.usd_value || 0), 0);
 
-    const portfolioDefiValue = ethPortfolioDefi.reduce((sum: number, pos: any) => sum + (pos.total_usd_value || 0), 0);
+    const portfolioDefiValue = ethPortfolioDefi.reduce((sum: number, pos: any) => sum + (pos?.total_usd_value || pos?.usd_value || 0), 0);
 
     return {
       ethereum: {
         defiPositions: ethDefiPositions,
         portfolioDefi: ethPortfolioDefi,
-        defiValue: ethDefiPositions.reduce((sum: number, pos: any) => sum + (pos.total_usd_value || 0), 0) + portfolioDefiValue
+        defiSummary: moralisRawData.ethereum?.defi_summary || {},
+        defiValue: ethDefiPositions.reduce((sum: number, pos: any) => sum + (pos?.total_usd_value || pos?.usd_value || 0), 0) + portfolioDefiValue
       },
       base: {
         defiPositions: baseDefiPositions,
-        defiValue: baseDefiPositions.reduce((sum: number, pos: any) => sum + (pos.total_usd_value || 0), 0)
+        defiSummary: moralisRawData.base?.defi_summary || {},
+        defiValue: baseDefiPositions.reduce((sum: number, pos: any) => sum + (pos?.total_usd_value || pos?.usd_value || 0), 0)
       },
       polygon: {
         defiPositions: polygonDefiPositions,
-        defiValue: polygonDefiPositions.reduce((sum: number, pos: any) => sum + (pos.total_usd_value || 0), 0)
+        defiSummary: moralisRawData.polygon?.defi_summary || {},
+        defiValue: polygonDefiPositions.reduce((sum: number, pos: any) => sum + (pos?.total_usd_value || pos?.usd_value || 0), 0)
       },
       combined: {
         totalDefiValue: totalDefiValue + portfolioDefiValue,
@@ -153,7 +172,9 @@ class PoolAnalyzer {
           baseDefiPositions.length > 0 ? 'base' : null,
           polygonDefiPositions.length > 0 ? 'polygon' : null
         ].filter(Boolean)
-      }
+      },
+      // Include all raw data for GPT processing
+      rawData: moralisRawData
     };
   }
 
@@ -167,19 +188,22 @@ class PoolAnalyzer {
       // Fetch DeFi positions and portfolio data from all supported chains
       const [
         // Ethereum DeFi data
-        ethDefiPositions, ethPortfolio,
+        ethDefiPositions, ethPortfolio, ethDefiSummary,
         // Base DeFi data (if available)
-        baseDefiPositions,
+        baseDefiPositions, baseDefiSummary,
         // Polygon DeFi data (if available) 
-        polygonDefiPositions
+        polygonDefiPositions, polygonDefiSummary
       ] = await Promise.all([
         // Ethereum
         this.moralisAPI.getDefiPositions(address, 'eth'),
         this.moralisAPI.getWalletPortfolio(address, 'eth'),
+        this.moralisAPI.getDefiSummary(address, 'eth'),
         // Base
         this.moralisAPI.getDefiPositions(address, 'base'),
+        this.moralisAPI.getDefiSummary(address, 'base'),
         // Polygon
-        this.moralisAPI.getDefiPositions(address, 'polygon')
+        this.moralisAPI.getDefiPositions(address, 'polygon'),
+        this.moralisAPI.getDefiSummary(address, 'polygon')
       ]);
 
       // Calculate total DeFi value across all chains
@@ -197,14 +221,17 @@ class PoolAnalyzer {
         ethereum: {
           defiPositions: ethDefiPositions,
           portfolioDefi: ethPortfolioDefi,
+          defiSummary: ethDefiSummary,
           defiValue: ethDefiPositions.reduce((sum, pos) => sum + (pos.total_usd_value || 0), 0) + portfolioDefiValue
         },
         base: {
           defiPositions: baseDefiPositions,
+          defiSummary: baseDefiSummary,
           defiValue: baseDefiPositions.reduce((sum, pos) => sum + (pos.total_usd_value || 0), 0)
         },
         polygon: {
           defiPositions: polygonDefiPositions,
+          defiSummary: polygonDefiSummary,
           defiValue: polygonDefiPositions.reduce((sum, pos) => sum + (pos.total_usd_value || 0), 0)
         },
         combined: {
@@ -220,9 +247,9 @@ class PoolAnalyzer {
     } catch (error) {
       console.warn('Could not fetch Moralis multi-chain DeFi data');
       return {
-        ethereum: { defiPositions: [], portfolioDefi: [], defiValue: 0 },
-        base: { defiPositions: [], defiValue: 0 },
-        polygon: { defiPositions: [], defiValue: 0 },
+        ethereum: { defiPositions: [], portfolioDefi: [], defiSummary: {}, defiValue: 0 },
+        base: { defiPositions: [], defiSummary: {}, defiValue: 0 },
+        polygon: { defiPositions: [], defiSummary: {}, defiValue: 0 },
         combined: { totalDefiValue: 0, totalPositions: 0, chainsWithDefi: [] }
       };
     }
@@ -403,7 +430,7 @@ Established protocol, Audited contracts, Stable pairs, Blue chip assets
 </examples>
 
 <output_format>
-Respond with valid JSON only:
+CRITICAL: You must respond with valid JSON only. Do not include any text before or after the JSON.
 {
   "gpt_analysis": "detailed analysis text",
   "risk_score": number (0-100),
@@ -417,6 +444,7 @@ Respond with valid JSON only:
             content: prompt
           }
         ],
+
         temperature: 0.3,
         max_tokens: 1500
       });
@@ -465,6 +493,32 @@ MULTI-CHAIN BREAKDOWN:`;
     for (const [chain, data] of Object.entries(chainData)) {
       const chainInfo = data as any;
       prompt += `\n- ${chain.toUpperCase()}: $${chainInfo.defiValue.toLocaleString()} (${chainInfo.positionCount} positions)`;
+    }
+
+    // Add DeFi summary information if available
+    const chains = ['ethereum', 'base', 'polygon'];
+    const defiSummaries = [];
+    
+    for (const chain of chains) {
+      const chainInfo = data[chain];
+      if (chainInfo && chainInfo.defiSummary && chainInfo.defiSummary.total_usd_value > 0) {
+        defiSummaries.push({
+          chain,
+          totalValue: chainInfo.defiSummary.total_usd_value,
+          protocols: chainInfo.defiSummary.protocols || []
+        });
+      }
+    }
+
+    if (defiSummaries.length > 0) {
+      prompt += `\n\nDEFI PROTOCOL SUMMARY:`;
+      for (const summary of defiSummaries) {
+        prompt += `\n- ${summary.chain.toUpperCase()}: $${summary.totalValue.toLocaleString()}`;
+        if (summary.protocols.length > 0) {
+          const protocolNames = summary.protocols.slice(0, 5).map((p: any) => p.name || p.protocol_name || 'Unknown').join(', ');
+          prompt += ` (Protocols: ${protocolNames})`;
+        }
+      }
     }
 
     prompt += `\n\nPOSITIONS BY PROTOCOL:`;

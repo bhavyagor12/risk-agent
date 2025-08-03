@@ -165,7 +165,7 @@ Portfolio Value: $125k
 </priority_focus>
 
 <output_format>
-Respond with valid JSON only:
+CRITICAL: You must respond with valid JSON only. Do not include any text before or after the JSON.
 {
   "overall_risk_score": number (0-100),
   "risk_level": "very-low|low|medium|high|very-high",
@@ -195,6 +195,7 @@ Respond with valid JSON only:
             content: prompt
           }
         ],
+
         temperature: 0.2,
         max_tokens: 2000
       });
@@ -228,19 +229,28 @@ DATA SOURCES: ${Object.keys(walletData.raw_data).join(', ').toUpperCase()}
 
 `;
 
-    // Multi-Chain Portfolio Overview
+    // Multi-Chain Portfolio Overview - handle flexible data structure
     const moralisData = walletData.raw_data.moralis as any;
-    if (moralisData?.combined_metrics) {
-      const metrics = moralisData.combined_metrics;
+    
+    // Get net worth from either raw data or processed data
+    const netWorthData = moralisData?.raw_multi_chain_net_worth || moralisData?.combined_metrics;
+    const portfolioData = moralisData?.raw_ethereum_portfolio || moralisData?.ethereum?.portfolio;
+    const profitLossData = moralisData?.raw_ethereum_profit_loss || moralisData?.ethereum?.profit_loss;
+    
+    if (netWorthData) {
+      const totalNetWorth = netWorthData.total_networth_usd || netWorthData.total_net_worth_usd;
+      const chainsActive = netWorthData.total_chains_active || 0;
+      const chainsWithActivity = netWorthData.chains_with_activity || [];
+      
       prompt += `MULTI-CHAIN PORTFOLIO OVERVIEW:
-- Total Net Worth: $${metrics.total_net_worth_usd?.toLocaleString() || 'Unknown'}
-- Active Chains: ${metrics.total_chains_active || 0} (${metrics.chains_with_activity?.join(', ') || 'None'})
-- Ethereum Portfolio Value: $${moralisData.ethereum?.portfolio?.totalValue?.toLocaleString() || '0'}`;
+- Total Net Worth: $${parseFloat(totalNetWorth || '0').toLocaleString()}
+- Active Chains: ${chainsActive} (${Array.isArray(chainsWithActivity) ? chainsWithActivity.join(', ') : 'None'})
+- Ethereum Portfolio Value: $${parseFloat(portfolioData?.totalValue || '0').toLocaleString()}`;
 
-      // Add P&L if available
-      if (moralisData.ethereum?.profit_loss?.total_realized_profit_percentage !== undefined) {
-        const pnl = moralisData.ethereum.profit_loss;
-        prompt += `\n- Trading Performance (ETH): ${pnl.total_realized_profit_percentage.toFixed(2)}% (+$${Number(pnl.total_realized_profit_usd).toLocaleString()})`;
+      // Add P&L if available from either raw or processed data
+      if (profitLossData?.total_realized_profit_percentage !== undefined) {
+        const pnl = profitLossData;
+        prompt += `\n- Trading Performance (ETH): ${parseFloat(pnl.total_realized_profit_percentage || 0).toFixed(2)}% (+$${parseFloat(pnl.total_realized_profit_usd || 0).toLocaleString()})`;
         prompt += `\n- Total Trades: ${pnl.total_count_of_trades || 0}`;
       }
       prompt += '\n\n';
@@ -274,26 +284,46 @@ DATA SOURCES: ${Object.keys(walletData.raw_data).join(', ').toUpperCase()}
 `;
     }
 
-    // Multi-Chain Transaction Activity
-    if (moralisData?.ethereum?.transactions) {
-      const ethTxCount = moralisData.ethereum.transactions.length;
+    // Multi-Chain Transaction Activity - handle flexible data structure
+    const ethTransactions = moralisData?.raw_ethereum_transactions?.result || 
+                           moralisData?.raw_ethereum_transactions || 
+                           moralisData?.ethereum?.transactions || [];
+    
+    if (ethTransactions.length > 0) {
+      const ethTxCount = ethTransactions.length;
       prompt += `MULTI-CHAIN TRANSACTION ACTIVITY:
 - Ethereum transactions analyzed: ${ethTxCount}
 `;
     }
 
-    // Chain-specific data breakdown
+    // Chain-specific data breakdown - handle flexible data structure
     const chains = ['ethereum', 'base', 'polygon'];
     prompt += `CHAIN-SPECIFIC BREAKDOWN:\n`;
     
     for (const chain of chains) {
-      const chainData = moralisData?.[chain];
-      if (chainData && (chainData.token_balances?.length > 0 || parseFloat(chainData.native_balance?.balance_formatted || '0') > 0)) {
+      // Try raw API data first, then fallback to processed data
+      const tokenBalances = moralisData?.[`raw_${chain}_token_balances`]?.result || 
+                           moralisData?.[`raw_${chain}_token_balances`] || 
+                           moralisData?.[chain]?.token_balances || [];
+      
+      const nativeBalance = moralisData?.[`raw_${chain}_native_balance`] || 
+                           moralisData?.[chain]?.native_balance || {};
+      
+      const defiPositions = moralisData?.[`raw_${chain}_defi_positions`]?.result || 
+                           moralisData?.[`raw_${chain}_defi_positions`] || 
+                           moralisData?.[chain]?.defi_positions || [];
+      
+      const netWorth = moralisData?.raw_multi_chain_net_worth || 
+                      moralisData?.[chain]?.net_worth || {};
+      
+      const hasActivity = tokenBalances.length > 0 || parseFloat(nativeBalance.balance_formatted || '0') > 0;
+      
+      if (hasActivity) {
         prompt += `- ${chain.toUpperCase()}:\n`;
-        prompt += `  Net Worth: $${parseFloat(chainData.net_worth?.total_networth_usd || '0').toLocaleString()}\n`;
-        prompt += `  Token Count: ${chainData.token_balances?.length || 0}\n`;
-        prompt += `  Native Balance: ${chainData.native_balance?.balance_formatted || '0'}\n`;
-        prompt += `  DeFi Positions: ${chainData.defi_positions?.length || 0}\n`;
+        prompt += `  Net Worth: $${parseFloat(netWorth.total_networth_usd || '0').toLocaleString()}\n`;
+        prompt += `  Token Count: ${tokenBalances.length || 0}\n`;
+        prompt += `  Native Balance: ${nativeBalance.balance_formatted || '0'}\n`;
+        prompt += `  DeFi Positions: ${defiPositions.length || 0}\n`;
       }
     }
 

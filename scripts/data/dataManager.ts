@@ -6,27 +6,9 @@ export interface WalletAnalysisData {
   last_updated: string;
   analysis_version: string;
   
-  // Raw API Data
+  // Raw API Data - Flexible structure to store any data from APIs
   raw_data: {
-    zerion?: {
-      pnl: any;
-      portfolio: any;
-      transactions: any[];
-    };
-    moralis?: {
-      native_balance: any;
-      token_balances: any[];
-      transactions: any[];
-      defi_positions: any[];
-      nfts: any[];
-      net_worth: any;
-      pnl: any;
-    };
-    dune?: {
-      wallet_metrics: any;
-      dex_patterns: any;
-      defi_interactions: any;
-    };
+    [key: string]: any; // Allow any data structure from any API
   };
   
   // Analysis Results
@@ -157,7 +139,7 @@ export class DataManager {
    */
   async updateRawData(
     address: string, 
-    source: 'zerion' | 'moralis' | 'dune', 
+    source: string, // Allow any API source name
     data: any
   ): Promise<WalletAnalysisData> {
     let walletData = await this.loadWalletData(address);
