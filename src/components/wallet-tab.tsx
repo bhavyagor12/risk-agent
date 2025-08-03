@@ -26,8 +26,11 @@ interface WalletData {
             balance: string;
             balance_formatted: string;
           };
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tokenBalances: any[];
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           nftBalances: any[];
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           defiPositions: any[];
           netWorth: {
             total_networth_usd: string;
@@ -62,6 +65,7 @@ interface WalletData {
             networth_usd: string;
           }>;
         };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         transactions: any[];
       };
     };
