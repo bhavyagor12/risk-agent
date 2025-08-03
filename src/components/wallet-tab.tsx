@@ -1,13 +1,22 @@
 // components/wallet-tab.tsx
 
 "use client";
-import { useEffect, useState } from "react";
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion";
+import React, { useState, useEffect } from 'react';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
+
+// Import wallet data directly
+import wallet1Data from '../../public/data/wallets/0x51db92258a3ab0f81de0feab5d59a77e49b57275.json';
+import wallet2Data from '../../public/data/wallets/0x38e247893bbc8517a317c54ed34f9c62cb5f26c0.json';
+import wallet3Data from '../../public/data/wallets/0x3fec8fd95b122887551c19c73f6b2bbf445b8c87.json';
+import wallet4Data from '../../public/data/wallets/0x7a29ae65bf25dfb6e554bf0468a6c23ed99a8dc2.json';
+
+// Wallet data mapping
+const walletDataMap: { [key: string]: any } = {
+  '0x51db92258a3ab0f81de0feab5d59a77e49b57275': wallet1Data,
+  '0x38e247893bbc8517a317c54ed34f9c62cb5f26c0': wallet2Data,
+  '0x3fec8fd95b122887551c19c73f6b2bbf445b8c87': wallet3Data,
+  '0x7a29ae65bf25dfb6e554bf0468a6c23ed99a8dc2': wallet4Data,
+};
 
 interface WalletTabProps {
   address: string;
@@ -120,15 +129,18 @@ export default function WalletTab({ address }: WalletTabProps) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const fetchWalletData = async () => {
+    const loadWalletData = async () => {
       try {
         setLoading(true);
-        // Load from the data/wallets directory
-        const response = await fetch(`/data/wallets/${address}.json`);
-        if (!response.ok) {
-          throw new Error(`Failed to load wallet data: ${response.status}`);
+        setError(null);
+        
+        // Get data from the mapping
+        const walletData = walletDataMap[address.toLowerCase()];
+        
+        if (!walletData) {
+          throw new Error(`Wallet data not found for address: ${address}`);
         }
-        const walletData = await response.json();
+        
         setData(walletData);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load wallet data');
@@ -137,7 +149,7 @@ export default function WalletTab({ address }: WalletTabProps) {
       }
     };
 
-    fetchWalletData();
+    loadWalletData();
   }, [address]);
 
   if (loading) {
