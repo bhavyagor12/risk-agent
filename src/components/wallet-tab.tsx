@@ -11,6 +11,7 @@ import wallet3Data from '../../public/data/wallets/0x3fec8fd95b122887551c19c73f6
 import wallet4Data from '../../public/data/wallets/0x7a29ae65bf25dfb6e554bf0468a6c23ed99a8dc2.json';
 
 // Wallet data mapping
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const walletDataMap: { [key: string]: any } = {
   '0x51db92258a3ab0f81de0feab5d59a77e49b57275': wallet1Data,
   '0x38e247893bbc8517a317c54ed34f9c62cb5f26c0': wallet2Data,
