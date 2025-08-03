@@ -21,7 +21,7 @@ async function testNewArchitecture(address: string) {
     const requiredEnvVars = [
       'ZERION_API_KEY',
       'MORALIS_API_KEY', 
-      'OPENAI_API_KEY'
+      'OPENAI_API_SECRET'
     ];
 
     const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
@@ -35,6 +35,8 @@ async function testNewArchitecture(address: string) {
       process.exit(1);
     }
 
+    
+
     // Initialize the analyzer
     console.log('🔧 Initializing WalletRiskAnalyzer...');
     const analyzer = new WalletRiskAnalyzer();
@@ -42,19 +44,18 @@ async function testNewArchitecture(address: string) {
 
     // Run comprehensive analysis
     console.log('🔍 Running comprehensive analysis...');
-    console.log('   This may take a few moments as we:');
-    console.log('   • Fetch data from Zerion, Moralis, and Dune');
-    console.log('   • Run GPT-powered asset analysis');
-    console.log('   • Run GPT-powered pool analysis');
-    console.log('   • Generate final GPT risk assessment');
-    console.log('   • Store results in JSON files\n');
+    console.log('This may take a few moments as we:');
+    console.log('• Fetch data from Zerion and Moralis');
+    console.log('• Run GPT-powered asset analysis');
+    console.log('• Run GPT-powered pool analysis');
+    console.log('• Generate final GPT risk assessment');
+    console.log('• Store results in JSON files\n');
 
     const startTime = Date.now();
     
     const result = await analyzer.analyzeWallet(address, {
       forceRefresh: true,
-      maxAgeMinutes: 1,
-      skipDune: false // Set to true if you don't have Dune API key
+      maxAgeMinutes: 1
     });
 
     const analysisTime = Date.now() - startTime;
@@ -188,8 +189,7 @@ async function main() {
     console.log('\nEnvironment variables required:');
     console.log('• ZERION_API_KEY - Get from Zerion');
     console.log('• MORALIS_API_KEY - Get from Moralis');
-    console.log('• OPENAI_API_KEY - Get from OpenAI');
-    console.log('• DUNE_API_KEY - Get from Dune (optional)');
+    console.log('• OPENAI_API_SECRET - Get from OpenAI');
     process.exit(1);
   }
 

@@ -1,10 +1,9 @@
 import dotenv from 'dotenv';
-import ZerionAPI from './api/zerionAPI';
 import MoralisAPI from './api/moralisAPI';
-import DuneAPI from './api/duneAPI';
 import DataManager from './data/dataManager';
 import AssetAnalyzer from './analyseAssets';
 import PoolAnalyzer from './analysePoolsGPT';
+import ProtocolAnalyzer from './analyseProtocols';
 import FinalRiskAnalyzer from './finalRiskAnalyzer';
 
 // Load environment variables
@@ -24,6 +23,12 @@ export interface WalletRiskAnalysisResult {
       severity: 'low' | 'medium' | 'high' | 'critical';
       message: string;
     }>;
+    multiChainInfo?: {
+      totalChainsActive: number;
+      chainsWithActivity: string[];
+      crossChainRisks: string[];
+      chainSpecificRisks: { [chain: string]: string[] };
+    };
   };
   individual_analyses: {
     assets?: {
@@ -45,11 +50,31 @@ export interface WalletRiskAnalysisResult {
       recommendations: string[];
     };
   };
+  multiChainData?: {
+    totalNetWorth: number;
+    chainsActive: number;
+    chainBreakdown: {
+      [chain: string]: {
+        netWorth: number;
+        tokenCount: number;
+        nativeBalance: string;
+        defiPositions: number;
+        hasActivity: boolean;
+      };
+    };
+    crossChainExposure: boolean;
+    tradingPerformance?: {
+      totalTrades: number;
+      realizedProfitUsd: number;
+      realizedProfitPercentage: number;
+    };
+  };
   metadata: {
     analysis_version: string;
     last_updated: string;
     data_sources: string[];
     processing_time_ms?: number;
+    moralis_chains_analyzed: string[];
   };
 }
 
@@ -57,35 +82,30 @@ export class WalletRiskAnalyzer {
   private dataManager: DataManager;
   private assetAnalyzer: AssetAnalyzer;
   private poolAnalyzer: PoolAnalyzer;
+  private protocolAnalyzer: ProtocolAnalyzer;
   private finalAnalyzer: FinalRiskAnalyzer;
-  private zerionAPI: ZerionAPI;
   private moralisAPI: MoralisAPI;
-  private duneAPI?: DuneAPI;
 
   constructor() {
     // Initialize data manager
     this.dataManager = new DataManager();
 
     // Get API keys from environment
-    const zerionApiKey = process.env.ZERION_API_KEY;
     const moralisApiKey = process.env.MORALIS_API_KEY;
-    const duneApiKey = process.env.DUNE_API_KEY;
-    const openaiApiKey = process.env.OPENAI_API_KEY;
+    const openaiApiKey = process.env.OPENAI_API_SECRET;
+    const serpApiKey = process.env.SERP_API_KEY;
 
-    if (!zerionApiKey || !moralisApiKey || !openaiApiKey) {
-      throw new Error('Required API keys missing. Please check your environment variables.');
+    if (!moralisApiKey || !openaiApiKey || !serpApiKey) {
+      throw new Error('Required API keys missing. Please check your environment variables (MORALIS_API_KEY, OPENAI_API_SECRET, SERP_API_KEY).');
     }
 
     // Initialize API clients
-    this.zerionAPI = new ZerionAPI(zerionApiKey);
     this.moralisAPI = new MoralisAPI(moralisApiKey);
-    if (duneApiKey) {
-      this.duneAPI = new DuneAPI(duneApiKey);
-    }
 
-    // Initialize analyzers
-    this.assetAnalyzer = new AssetAnalyzer(zerionApiKey, moralisApiKey, openaiApiKey, this.dataManager);
-    this.poolAnalyzer = new PoolAnalyzer(zerionApiKey, moralisApiKey, openaiApiKey, this.dataManager);
+    // Initialize analyzers (Moralis-only)
+    this.assetAnalyzer = new AssetAnalyzer(moralisApiKey, openaiApiKey, serpApiKey, this.dataManager);
+    this.poolAnalyzer = new PoolAnalyzer(moralisApiKey, openaiApiKey, this.dataManager);
+    this.protocolAnalyzer = new ProtocolAnalyzer(openaiApiKey, serpApiKey, this.dataManager);
     this.finalAnalyzer = new FinalRiskAnalyzer(openaiApiKey, this.dataManager);
   }
 
@@ -97,7 +117,6 @@ export class WalletRiskAnalyzer {
     options: {
       forceRefresh?: boolean;
       maxAgeMinutes?: number;
-      skipDune?: boolean;
     } = {}
   ): Promise<WalletRiskAnalysisResult> {
     const startTime = Date.now();
@@ -123,12 +142,14 @@ export class WalletRiskAnalyzer {
       console.log(`🔄 Running fresh analysis for ${address}`);
 
       // Step 1: Fetch raw data from all sources
-      await this.fetchAllRawData(address, options.skipDune);
+      await this.fetchAllRawData(address);
 
-      // Step 2: Run individual analyses in parallel
-      const [assetAnalysis, poolAnalysis] = await Promise.all([
-        this.runAssetAnalysis(address),
-        this.runPoolAnalysis(address)
+      // Step 2: Load the fetched data and run individual analyses in parallel
+      const walletData = await this.dataManager.loadWalletData(address);
+      const [assetAnalysis, poolAnalysis, protocolAnalysis] = await Promise.all([
+        this.runAssetAnalysis(address, walletData),
+        this.runPoolAnalysis(address, walletData),
+        this.runProtocolAnalysis(address, walletData)
       ]);
 
       // Step 3: Run final combined analysis
@@ -149,67 +170,114 @@ export class WalletRiskAnalyzer {
   }
 
   /**
-   * Fetch raw data from all available sources
+   * Fetch raw multi-chain data from Moralis only
    */
-  private async fetchAllRawData(address: string, skipDune = false): Promise<void> {
-    console.log(`📡 Fetching raw data from all sources...`);
+  private async fetchAllRawData(address: string): Promise<void> {
+    console.log(`📡 Fetching multi-chain data from Moralis...`);
 
     try {
-      // Fetch from Zerion and Moralis in parallel
-      const [zerionPortfolio, zerionPnL, moralisNetWorth, moralisTransactions] = await Promise.all([
-        this.zerionAPI.getWalletPortfolio(address).catch(() => ({ totalValue: 0, positions: [], currency: 'usd' })),
-        this.zerionAPI.getWalletPnL(address).catch(() => ({ total_pnl: 0, total_pnl_percentage: 0, realized_pnl: 0, unrealized_pnl: 0, currency: 'usd' })),
-        this.moralisAPI.getNetWorth(address).catch(() => ({ total_networth_usd: '0', chains: [] })),
-        this.moralisAPI.getTransactions(address, 50).catch(() => [])
+      // Fetch comprehensive multi-chain data from Moralis in parallel
+      const [
+        // Ethereum data
+        ethPortfolio, ethTransactions, ethTokenBalances, ethNativeBalance, ethDefiPositions, ethProfitLoss,
+        // Base data
+        baseTokenBalances, baseNativeBalance, baseDefiPositions,
+        // Polygon data
+        polygonTokenBalances, polygonNativeBalance, polygonDefiPositions,
+        // Multi-chain net worth (single call for all chains)
+        multiChainNetWorth
+      ] = await Promise.all([
+        // Ethereum
+        this.moralisAPI.getWalletPortfolio(address, 'eth').catch(() => ({ totalValue: 0, nativeBalance: { balance: '0', balance_formatted: '0' }, tokenBalances: [], nftBalances: [], defiPositions: [], netWorth: { total_networth_usd: '0', chains: [] }, profitLoss: {} })),
+        this.moralisAPI.getTransactions(address, 'eth', 100).catch(() => []),
+        this.moralisAPI.getTokenBalances(address, 'eth').catch(() => []),
+        this.moralisAPI.getNativeBalance(address, 'eth').catch(() => ({ balance: '0', balance_formatted: '0' })),
+        this.moralisAPI.getDefiPositions(address, 'eth').catch(() => []),
+        this.moralisAPI.getProfitAndLoss(address, 'eth').catch(() => ({})),
+        // Base
+        this.moralisAPI.getTokenBalances(address, 'base').catch(() => []),
+        this.moralisAPI.getNativeBalance(address, 'base').catch(() => ({ balance: '0', balance_formatted: '0' })),
+        this.moralisAPI.getDefiPositions(address, 'base').catch(() => []),
+        // Polygon
+        this.moralisAPI.getTokenBalances(address, 'polygon').catch(() => []),
+        this.moralisAPI.getNativeBalance(address, 'polygon').catch(() => ({ balance: '0', balance_formatted: '0' })),
+        this.moralisAPI.getDefiPositions(address, 'polygon').catch(() => []),
+        // Multi-chain net worth (single API call - gets all chains by default)
+        this.moralisAPI.getNetWorth(address).catch(() => ({ total_networth_usd: '0', chains: [] }))
       ]);
 
-      // Store Zerion data
-      await this.dataManager.updateRawData(address, 'zerion', {
-        portfolio: zerionPortfolio,
-        pnl: zerionPnL,
-        transactions: []
-      });
+      // Extract chain-specific net worth data from multi-chain response
+      const ethNetWorth = {
+        total_networth_usd: multiChainNetWorth.total_networth_usd,
+        chains: multiChainNetWorth.chains?.filter(chain => chain.chain === 'eth' || chain.chain === 'ethereum') || []
+      };
+      
+      const baseNetWorth = {
+        total_networth_usd: multiChainNetWorth.total_networth_usd,
+        chains: multiChainNetWorth.chains?.filter(chain => chain.chain === 'base') || []
+      };
+      
+      const polygonNetWorth = {
+        total_networth_usd: multiChainNetWorth.total_networth_usd,
+        chains: multiChainNetWorth.chains?.filter(chain => chain.chain === 'polygon') || []
+      };
 
-      // Store Moralis data
+      // Calculate combined metrics
+      const totalNetWorth = parseFloat(multiChainNetWorth.total_networth_usd || '0');
+
+      // Store comprehensive Moralis multi-chain data
       await this.dataManager.updateRawData(address, 'moralis', {
-        net_worth: moralisNetWorth,
-        transactions: moralisTransactions,
-        token_balances: [],
-        native_balance: { balance: '0', balance_formatted: '0' },
-        defi_positions: [],
-        nfts: [],
-        pnl: {}
+        ethereum: {
+          portfolio: ethPortfolio,
+          net_worth: ethNetWorth,
+          transactions: ethTransactions,
+          token_balances: ethTokenBalances,
+          native_balance: ethNativeBalance,
+          defi_positions: ethDefiPositions,
+          profit_loss: ethProfitLoss
+        },
+        base: {
+          net_worth: baseNetWorth,
+          token_balances: baseTokenBalances,
+          native_balance: baseNativeBalance,
+          defi_positions: baseDefiPositions
+        },
+        polygon: {
+          net_worth: polygonNetWorth,
+          token_balances: polygonTokenBalances,
+          native_balance: polygonNativeBalance,
+          defi_positions: polygonDefiPositions
+        },
+        combined_metrics: {
+          total_net_worth_usd: totalNetWorth,
+          total_chains_active: [
+            ethTokenBalances.length > 0 || parseFloat(ethNativeBalance.balance_formatted) > 0 ? 'ethereum' : null,
+            baseTokenBalances.length > 0 || parseFloat(baseNativeBalance.balance_formatted) > 0 ? 'base' : null,
+            polygonTokenBalances.length > 0 || parseFloat(polygonNativeBalance.balance_formatted) > 0 ? 'polygon' : null
+          ].filter(Boolean).length,
+          chains_with_activity: [
+            ethTokenBalances.length > 0 || parseFloat(ethNativeBalance.balance_formatted) > 0 ? 'ethereum' : null,
+            baseTokenBalances.length > 0 || parseFloat(baseNativeBalance.balance_formatted) > 0 ? 'base' : null,
+            polygonTokenBalances.length > 0 || parseFloat(polygonNativeBalance.balance_formatted) > 0 ? 'polygon' : null
+          ].filter(Boolean)
+        }
       });
 
-      // Fetch from Dune if available and not skipped
-      if (this.duneAPI && !skipDune) {
-        try {
-          const duneMetrics = await this.duneAPI.getWalletMetrics(address);
-          await this.dataManager.updateRawData(address, 'dune', {
-            wallet_metrics: duneMetrics,
-            dex_patterns: {},
-            defi_interactions: {}
-          });
-        } catch (error) {
-          console.warn('Could not fetch Dune data, continuing without it');
-        }
-      }
-
-      console.log(`✅ Raw data fetching completed`);
+      console.log(`✅ Multi-chain raw data fetching completed`);
 
     } catch (error: any) {
-      console.error('Error fetching raw data:', error.message);
+      console.error('Error fetching multi-chain raw data:', error.message);
       // Continue with analysis even if some data sources fail
     }
   }
 
   /**
-   * Run asset analysis
+   * Run asset analysis with pre-fetched data
    */
-  private async runAssetAnalysis(address: string) {
+  private async runAssetAnalysis(address: string, walletData?: any) {
     console.log(`🪙 Running asset analysis...`);
     try {
-      return await this.assetAnalyzer.analyzeWalletAssets(address);
+      return await this.assetAnalyzer.analyzeWalletAssets(address, walletData);
     } catch (error: any) {
       console.error('Asset analysis failed:', error.message);
       // Store failed analysis
@@ -224,12 +292,12 @@ export class WalletRiskAnalyzer {
   }
 
   /**
-   * Run pool analysis
+   * Run pool analysis with pre-fetched data
    */
-  private async runPoolAnalysis(address: string) {
+  private async runPoolAnalysis(address: string, walletData?: any) {
     console.log(`🏊 Running pool analysis...`);
     try {
-      return await this.poolAnalyzer.analyzeWalletPools(address);
+      return await this.poolAnalyzer.analyzeWalletPools(address, walletData);
     } catch (error: any) {
       console.error('Pool analysis failed:', error.message);
       // Store failed analysis
@@ -244,10 +312,72 @@ export class WalletRiskAnalyzer {
   }
 
   /**
-   * Format the final result for API consumption
+   * Run protocol analysis with pre-fetched data
+   */
+  private async runProtocolAnalysis(address: string, walletData?: any) {
+    console.log(`🏗️ Running protocol analysis...`);
+    try {
+      return await this.protocolAnalyzer.analyzeWalletProtocols(address, walletData);
+    } catch (error: any) {
+      console.error('Protocol analysis failed:', error.message);
+      // Store failed analysis
+      await this.dataManager.updateAnalysis(address, 'protocols', {
+        gpt_analysis: 'Protocol analysis failed due to data issues.',
+        risk_score: 50,
+        key_findings: ['Analysis incomplete'],
+        recommendations: ['Re-run analysis when data sources are available']
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Format the final result for API consumption with multi-chain support
    */
   private formatResult(walletData: any, processingTime: number): WalletRiskAnalysisResult {
     const dataSources = Object.keys(walletData.raw_data);
+    const moralisChainsAnalyzed: string[] = [];
+    
+    // Extract multi-chain data if available
+    let multiChainData = undefined;
+    if (walletData.raw_data.moralis) {
+      const moralisData = walletData.raw_data.moralis;
+      const chainBreakdown: { [chain: string]: any } = {};
+      
+      const chains = ['ethereum', 'base', 'polygon'];
+      for (const chain of chains) {
+        const chainData = moralisData[chain];
+        if (chainData) {
+          const hasActivity = (chainData.token_balances?.length > 0) || 
+                             (parseFloat(chainData.native_balance?.balance_formatted || '0') > 0);
+          
+          if (hasActivity) {
+            moralisChainsAnalyzed.push(chain);
+            chainBreakdown[chain] = {
+              netWorth: parseFloat(chainData.net_worth?.total_networth_usd || '0'),
+              tokenCount: chainData.token_balances?.length || 0,
+              nativeBalance: chainData.native_balance?.balance_formatted || '0',
+              defiPositions: chainData.defi_positions?.length || 0,
+              hasActivity: true
+            };
+          }
+        }
+      }
+
+      if (Object.keys(chainBreakdown).length > 0) {
+        multiChainData = {
+          totalNetWorth: moralisData.combined_metrics?.total_net_worth_usd || 0,
+          chainsActive: moralisData.combined_metrics?.total_chains_active || 0,
+          chainBreakdown,
+          crossChainExposure: Object.keys(chainBreakdown).length > 1,
+          tradingPerformance: moralisData.ethereum?.profit_loss ? {
+            totalTrades: moralisData.ethereum.profit_loss.total_count_of_trades || 0,
+            realizedProfitUsd: parseFloat(moralisData.ethereum.profit_loss.total_realized_profit_usd || '0'),
+            realizedProfitPercentage: moralisData.ethereum.profit_loss.total_realized_profit_percentage || 0
+          } : undefined
+        };
+      }
+    }
     
     return {
       address: walletData.address,
@@ -258,11 +388,13 @@ export class WalletRiskAnalyzer {
         pools: walletData.analysis.pools,
         protocols: walletData.analysis.protocols
       },
+      multiChainData,
       metadata: {
-        analysis_version: walletData.analysis_version || '2.0',
+        analysis_version: walletData.analysis_version || '3.0-multichain',
         last_updated: walletData.last_updated,
         data_sources: dataSources,
-        processing_time_ms: processingTime
+        processing_time_ms: processingTime,
+        moralis_chains_analyzed: moralisChainsAnalyzed
       }
     };
   }

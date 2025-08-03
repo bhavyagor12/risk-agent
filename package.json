@@ -17,6 +17,7 @@
     "@langchain/openai": "^0.6.3",
     "@moralisweb3/next": "^2.27.2",
     "@radix-ui/react-tabs": "^1.1.12",
+    "@types/node-fetch": "^2.6.13",
     "axios": "^1.11.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -24,6 +25,7 @@
     "lucide-react": "^0.536.0",
     "moralis": "^2.27.2",
     "next": "15.4.5",
+    "node-fetch": "^3.3.2",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "tailwind-merge": "^3.3.1"

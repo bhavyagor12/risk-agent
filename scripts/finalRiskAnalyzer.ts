@@ -12,6 +12,12 @@ export interface FinalRiskAnalysis {
     severity: 'low' | 'medium' | 'high' | 'critical';
     message: string;
   }>;
+  multiChainInfo?: {
+    totalChainsActive: number;
+    chainsWithActivity: string[];
+    crossChainRisks: string[];
+    chainSpecificRisks: { [chain: string]: string[] };
+  };
 }
 
 export class FinalRiskAnalyzer {
@@ -80,7 +86,8 @@ export class FinalRiskAnalyzer {
           {
             role: "system",
             content: `<role>
-You are a senior cryptocurrency risk analyst providing a final comprehensive risk assessment. Synthesize all available data to provide an authoritative risk evaluation.
+You are a senior cryptocurrency risk analyst providing a final comprehensive risk assessment. 
+Synthesize all available data to provide an authoritative risk evaluation.
 </role>
 
 <analysis_framework>
@@ -169,7 +176,17 @@ Respond with valid JSON only:
   "alerts": [
     {"severity": "low|medium|high|critical", "message": "alert message"},
     ...
-  ]
+  ],
+  "multiChainInfo": {
+    "totalChainsActive": number,
+    "chainsWithActivity": ["chain1", "chain2", ...],
+    "crossChainRisks": ["risk1", "risk2", ...],
+    "chainSpecificRisks": {
+      "ethereum: ["eth_risk1", "eth_risk2"],
+      "base": ["base_risk1"],
+      "polygon": ["polygon_risk1"]
+    }
+  }
 }
 </output_format>`
           },
@@ -211,15 +228,22 @@ DATA SOURCES: ${Object.keys(walletData.raw_data).join(', ').toUpperCase()}
 
 `;
 
-    // Portfolio Overview
-    if (walletData.raw_data.zerion?.portfolio) {
-      const portfolio = walletData.raw_data.zerion.portfolio;
-      prompt += `PORTFOLIO OVERVIEW:
-- Total Value: $${portfolio.totalValue?.toLocaleString() || 'Unknown'}
-- Number of Positions: ${portfolio.positions?.length || 0}
-- Recent P&L: ${walletData.raw_data.zerion.pnl?.total_pnl_percentage?.toFixed(2) || 'N/A'}%
+    // Multi-Chain Portfolio Overview
+    const moralisData = walletData.raw_data.moralis as any;
+    if (moralisData?.combined_metrics) {
+      const metrics = moralisData.combined_metrics;
+      prompt += `MULTI-CHAIN PORTFOLIO OVERVIEW:
+- Total Net Worth: $${metrics.total_net_worth_usd?.toLocaleString() || 'Unknown'}
+- Active Chains: ${metrics.total_chains_active || 0} (${metrics.chains_with_activity?.join(', ') || 'None'})
+- Ethereum Portfolio Value: $${moralisData.ethereum?.portfolio?.totalValue?.toLocaleString() || '0'}`;
 
-`;
+      // Add P&L if available
+      if (moralisData.ethereum?.profit_loss?.total_realized_profit_percentage !== undefined) {
+        const pnl = moralisData.ethereum.profit_loss;
+        prompt += `\n- Trading Performance (ETH): ${pnl.total_realized_profit_percentage.toFixed(2)}% (+$${Number(pnl.total_realized_profit_usd).toLocaleString()})`;
+        prompt += `\n- Total Trades: ${pnl.total_count_of_trades || 0}`;
+      }
+      prompt += '\n\n';
     }
 
     // Individual Analysis Results
@@ -250,46 +274,54 @@ DATA SOURCES: ${Object.keys(walletData.raw_data).join(', ').toUpperCase()}
 `;
     }
 
-    // Raw Data Insights
-    if (walletData.raw_data.moralis?.transactions) {
-      const txCount = walletData.raw_data.moralis.transactions.length;
-      prompt += `TRANSACTION ACTIVITY:
-- Recent transactions analyzed: ${txCount}
+    // Multi-Chain Transaction Activity
+    if (moralisData?.ethereum?.transactions) {
+      const ethTxCount = moralisData.ethereum.transactions.length;
+      prompt += `MULTI-CHAIN TRANSACTION ACTIVITY:
+- Ethereum transactions analyzed: ${ethTxCount}
 `;
     }
 
-    if (walletData.raw_data.dune?.wallet_metrics) {
-      const metrics = walletData.raw_data.dune.wallet_metrics;
-      prompt += `BLOCKCHAIN METRICS (Dune Analytics):
-- Total transactions: ${metrics.total_transactions || 'N/A'}
-- Gas spent: ${metrics.gas_spent_eth || 'N/A'} ETH
-- Unique contracts: ${metrics.unique_contracts_interacted || 'N/A'}
-- DeFi protocols used: ${metrics.defi_protocols_used?.length || 0}
-`;
+    // Chain-specific data breakdown
+    const chains = ['ethereum', 'base', 'polygon'];
+    prompt += `CHAIN-SPECIFIC BREAKDOWN:\n`;
+    
+    for (const chain of chains) {
+      const chainData = moralisData?.[chain];
+      if (chainData && (chainData.token_balances?.length > 0 || parseFloat(chainData.native_balance?.balance_formatted || '0') > 0)) {
+        prompt += `- ${chain.toUpperCase()}:\n`;
+        prompt += `  Net Worth: $${parseFloat(chainData.net_worth?.total_networth_usd || '0').toLocaleString()}\n`;
+        prompt += `  Token Count: ${chainData.token_balances?.length || 0}\n`;
+        prompt += `  Native Balance: ${chainData.native_balance?.balance_formatted || '0'}\n`;
+        prompt += `  DeFi Positions: ${chainData.defi_positions?.length || 0}\n`;
+      }
     }
 
     prompt += `
 
 ANALYSIS REQUEST:
-Please provide a comprehensive final risk assessment considering all the above data. Weight the individual analysis scores appropriately and identify the most critical risk factors. Consider:
+Please provide a comprehensive final risk assessment considering all the above MULTI-CHAIN data. Weight the individual analysis scores appropriately and identify the most critical risk factors. Consider:
 
-1. Asset quality and diversification risks
-2. DeFi exposure and smart contract risks  
-3. Protocol interaction patterns
-4. Overall portfolio construction
-5. Suspicious activity indicators
-6. Market risk exposure
+1. Asset quality and diversification risks across all chains
+2. DeFi exposure and smart contract risks (including multi-chain DeFi)
+3. Protocol interaction patterns across chains
+4. Multi-chain portfolio construction and management
+5. Cross-chain bridge risks and exposures
+6. Chain-specific risks (Ethereum gas fees, L2 centralization, Polygon validator risks)
+7. Suspicious activity indicators across all chains
+8. Market risk exposure amplified by multi-chain complexity
+9. Wallet management complexity across multiple chains
 
-Provide actionable recommendations prioritized by impact and urgency.`;
+Provide actionable recommendations prioritized by impact and urgency, with specific attention to multi-chain security considerations.`;
 
     return prompt;
   }
 
   /**
-   * Validate and normalize GPT response
+   * Validate and normalize GPT response with multi-chain support
    */
   private validateAndNormalizeFinalAnalysis(analysis: any): FinalRiskAnalysis {
-    return {
+    const result: FinalRiskAnalysis = {
       overall_risk_score: Math.max(0, Math.min(100, analysis.overall_risk_score || 50)),
       risk_level: this.normalizeRiskLevel(analysis.risk_level || analysis.overall_risk_score || 50),
       confidence_score: Math.max(0, Math.min(100, analysis.confidence_score || 50)),
@@ -298,6 +330,20 @@ Provide actionable recommendations prioritized by impact and urgency.`;
       recommendations: Array.isArray(analysis.recommendations) ? analysis.recommendations : [],
       alerts: this.validateAlerts(analysis.alerts || [])
     };
+
+    // Add multi-chain information if provided
+    if (analysis.multiChainInfo && typeof analysis.multiChainInfo === 'object') {
+      result.multiChainInfo = {
+        totalChainsActive: Math.max(0, analysis.multiChainInfo.totalChainsActive || 0),
+        chainsWithActivity: Array.isArray(analysis.multiChainInfo.chainsWithActivity) ? analysis.multiChainInfo.chainsWithActivity : [],
+        crossChainRisks: Array.isArray(analysis.multiChainInfo.crossChainRisks) ? analysis.multiChainInfo.crossChainRisks : [],
+        chainSpecificRisks: analysis.multiChainInfo.chainSpecificRisks && typeof analysis.multiChainInfo.chainSpecificRisks === 'object' 
+          ? analysis.multiChainInfo.chainSpecificRisks 
+          : {}
+      };
+    }
+
+    return result;
   }
 
   /**

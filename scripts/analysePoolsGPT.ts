@@ -1,5 +1,4 @@
 import { OpenAI } from 'openai';
-import ZerionAPI from './api/zerionAPI';
 import MoralisAPI from './api/moralisAPI';
 import DataManager from './data/dataManager';
 
@@ -11,7 +10,6 @@ export interface PoolAnalysisResult {
 }
 
 class PoolAnalyzer {
-  private zerionAPI: ZerionAPI;
   private moralisAPI: MoralisAPI;
   private dataManager: DataManager;
   private openai: OpenAI;
@@ -54,12 +52,10 @@ class PoolAnalyzer {
   };
 
   constructor(
-    zerionApiKey: string,
     moralisApiKey: string,
     openaiApiKey: string,
     dataManager: DataManager
   ) {
-    this.zerionAPI = new ZerionAPI(zerionApiKey);
     this.moralisAPI = new MoralisAPI(moralisApiKey);
     this.dataManager = dataManager;
     this.openai = new OpenAI({ apiKey: openaiApiKey });
@@ -68,26 +64,35 @@ class PoolAnalyzer {
   /**
    * Analyze all pool positions for a wallet using GPT
    */
-  async analyzeWalletPools(address: string): Promise<PoolAnalysisResult> {
+  async analyzeWalletPools(address: string, existingWalletData?: any): Promise<PoolAnalysisResult> {
     try {
-      console.log(`🔍 Analyzing pool positions for wallet: ${address}`);
+      console.log(`🔍 Analyzing pool positions for wallet: ${address} (Moralis-only)`);
       
-      // Fetch DeFi position data from multiple sources
-      const [zerionData, moralisData] = await Promise.all([
-        this.fetchZerionDefiData(address),
-        this.fetchMoralisDefiData(address)
-      ]);
+      // Use existing data if provided, otherwise fetch fresh data
+      let moralisData;
+      if (existingWalletData?.raw_data?.moralis) {
+        console.log(`📖 Using pre-fetched data for pool analysis`);
+        moralisData = this.transformExistingDataForPoolAnalysis(existingWalletData.raw_data.moralis);
+      } else {
+        console.log(`📡 Fetching fresh data for pool analysis`);
+        moralisData = await this.fetchMoralisMultiChainDefiData(address);
+      }
 
       // Store raw data (pools are part of the broader data structure)
-      const poolData = this.combinePoolData(zerionData, moralisData);
+      const poolData = this.combineMultiChainPoolData(moralisData);
       
       // If no DeFi positions found
       if (poolData.positions.length === 0) {
         const noPoolsResult = {
-          gpt_analysis: 'No DeFi pool positions detected in this wallet. The wallet appears to hold only basic token positions without active DeFi participation.',
+          gpt_analysis: 'No DeFi pool positions detected across any supported chains (Ethereum, Base, Polygon). The wallet appears to hold only basic token positions without active DeFi participation.',
           risk_score: 0,
-          key_findings: ['No DeFi exposure', 'No impermanent loss risk', 'No smart contract risk from pools'],
-          recommendations: ['Consider diversifying into established DeFi protocols if seeking yield', 'Start with low-risk lending protocols like Aave or Compound']
+          key_findings: ['No DeFi exposure across all chains', 'No impermanent loss risk', 'No smart contract risk from pools', 'No multi-chain DeFi complexity'],
+          recommendations: [
+            'Consider diversifying into established DeFi protocols if seeking yield', 
+            'Start with low-risk lending protocols like Aave or Compound on Ethereum',
+            'Explore Layer 2 DeFi opportunities on Base or Polygon for lower fees',
+            'Begin with single-asset staking before moving to LP positions'
+          ]
         };
         
         await this.dataManager.updateAnalysis(address, 'pools', noPoolsResult);
@@ -109,89 +114,204 @@ class PoolAnalyzer {
   }
 
   /**
-   * Fetch DeFi position data from Zerion
+   * Transform existing wallet data to expected format for pool analysis
    */
-  private async fetchZerionDefiData(address: string) {
+  private transformExistingDataForPoolAnalysis(moralisRawData: any) {
+    const ethDefiPositions = moralisRawData.ethereum?.defi_positions || [];
+    const baseDefiPositions = moralisRawData.base?.defi_positions || [];
+    const polygonDefiPositions = moralisRawData.polygon?.defi_positions || [];
+    const ethPortfolioDefi = moralisRawData.ethereum?.portfolio?.defiPositions || [];
+
+    // Calculate total DeFi value across all chains
+    const totalDefiValue = [
+      ...ethDefiPositions,
+      ...baseDefiPositions,
+      ...polygonDefiPositions
+    ].reduce((sum, pos) => sum + (pos.total_usd_value || 0), 0);
+
+    const portfolioDefiValue = ethPortfolioDefi.reduce((sum: number, pos: any) => sum + (pos.total_usd_value || 0), 0);
+
+    return {
+      ethereum: {
+        defiPositions: ethDefiPositions,
+        portfolioDefi: ethPortfolioDefi,
+        defiValue: ethDefiPositions.reduce((sum: number, pos: any) => sum + (pos.total_usd_value || 0), 0) + portfolioDefiValue
+      },
+      base: {
+        defiPositions: baseDefiPositions,
+        defiValue: baseDefiPositions.reduce((sum: number, pos: any) => sum + (pos.total_usd_value || 0), 0)
+      },
+      polygon: {
+        defiPositions: polygonDefiPositions,
+        defiValue: polygonDefiPositions.reduce((sum: number, pos: any) => sum + (pos.total_usd_value || 0), 0)
+      },
+      combined: {
+        totalDefiValue: totalDefiValue + portfolioDefiValue,
+        totalPositions: ethDefiPositions.length + baseDefiPositions.length + polygonDefiPositions.length + ethPortfolioDefi.length,
+        chainsWithDefi: [
+          ethDefiPositions.length > 0 || ethPortfolioDefi.length > 0 ? 'ethereum' : null,
+          baseDefiPositions.length > 0 ? 'base' : null,
+          polygonDefiPositions.length > 0 ? 'polygon' : null
+        ].filter(Boolean)
+      }
+    };
+  }
+
+  /**
+   * Fetch DeFi position data from Moralis across multiple chains
+   */
+  private async fetchMoralisMultiChainDefiData(address: string) {
     try {
-      const portfolio = await this.zerionAPI.getWalletPortfolio(address);
-      const defiPositions = portfolio.positions.filter(p => 
-        p.type === 'defi' || p.type === 'liquidity' || p.protocol
-      );
+      console.log(`📡 Fetching multi-chain DeFi data from Moralis...`);
       
+      // Fetch DeFi positions and portfolio data from all supported chains
+      const [
+        // Ethereum DeFi data
+        ethDefiPositions, ethPortfolio,
+        // Base DeFi data (if available)
+        baseDefiPositions,
+        // Polygon DeFi data (if available) 
+        polygonDefiPositions
+      ] = await Promise.all([
+        // Ethereum
+        this.moralisAPI.getDefiPositions(address, 'eth'),
+        this.moralisAPI.getWalletPortfolio(address, 'eth'),
+        // Base
+        this.moralisAPI.getDefiPositions(address, 'base'),
+        // Polygon
+        this.moralisAPI.getDefiPositions(address, 'polygon')
+      ]);
+
+      // Calculate total DeFi value across all chains
+      const totalDefiValue = [
+        ...ethDefiPositions,
+        ...baseDefiPositions,
+        ...polygonDefiPositions
+      ].reduce((sum, pos) => sum + (pos.total_usd_value || 0), 0);
+
+      // Add Ethereum portfolio DeFi positions
+      const ethPortfolioDefi = ethPortfolio.defiPositions || [];
+      const portfolioDefiValue = ethPortfolioDefi.reduce((sum: number, pos: any) => sum + (pos.total_usd_value || 0), 0);
+
       return {
-        defiPositions,
-        totalDefiValue: defiPositions.reduce((sum, p) => sum + p.value, 0)
+        ethereum: {
+          defiPositions: ethDefiPositions,
+          portfolioDefi: ethPortfolioDefi,
+          defiValue: ethDefiPositions.reduce((sum, pos) => sum + (pos.total_usd_value || 0), 0) + portfolioDefiValue
+        },
+        base: {
+          defiPositions: baseDefiPositions,
+          defiValue: baseDefiPositions.reduce((sum, pos) => sum + (pos.total_usd_value || 0), 0)
+        },
+        polygon: {
+          defiPositions: polygonDefiPositions,
+          defiValue: polygonDefiPositions.reduce((sum, pos) => sum + (pos.total_usd_value || 0), 0)
+        },
+        combined: {
+          totalDefiValue: totalDefiValue + portfolioDefiValue,
+          totalPositions: ethDefiPositions.length + baseDefiPositions.length + polygonDefiPositions.length + ethPortfolioDefi.length,
+          chainsWithDefi: [
+            ethDefiPositions.length > 0 || ethPortfolioDefi.length > 0 ? 'ethereum' : null,
+            baseDefiPositions.length > 0 ? 'base' : null,
+            polygonDefiPositions.length > 0 ? 'polygon' : null
+          ].filter(Boolean)
+        }
       };
     } catch (error) {
-      console.warn('Could not fetch Zerion DeFi data');
+      console.warn('Could not fetch Moralis multi-chain DeFi data');
       return {
-        defiPositions: [],
-        totalDefiValue: 0
+        ethereum: { defiPositions: [], portfolioDefi: [], defiValue: 0 },
+        base: { defiPositions: [], defiValue: 0 },
+        polygon: { defiPositions: [], defiValue: 0 },
+        combined: { totalDefiValue: 0, totalPositions: 0, chainsWithDefi: [] }
       };
     }
   }
 
   /**
-   * Fetch DeFi position data from Moralis
+   * Combine multi-chain pool data from Moralis
    */
-  private async fetchMoralisDefiData(address: string) {
-    try {
-      const defiPositions = await this.moralisAPI.getDefiPositions(address);
-      return { defiPositions };
-    } catch (error) {
-      console.warn('Could not fetch Moralis DeFi data');
-      return { defiPositions: [] };
-    }
-  }
-
-  /**
-   * Combine pool data from multiple sources
-   */
-  private combinePoolData(zerionData: any, moralisData: any) {
+  private combineMultiChainPoolData(moralisData: any) {
     const positions = [];
-    let totalValue = zerionData.totalDefiValue;
+    const chainData: { [key: string]: any } = {};
+    let totalValue = moralisData.combined.totalDefiValue;
 
-    // Process Zerion DeFi positions
-    for (const position of zerionData.defiPositions) {
-      positions.push({
-        source: 'zerion',
-        protocol: position.protocol || 'unknown',
-        asset: position.asset,
-        type: position.type,
-        value: position.value,
-        quantity: position.quantity,
-        tokens: position.tokens || [],
-        contractAddress: position.contractAddress
-      });
+    // Process each chain's DeFi positions
+    const chains = ['ethereum', 'base', 'polygon'];
+    
+    for (const chain of chains) {
+      const chainInfo = moralisData[chain];
+      if (!chainInfo) continue;
+
+      chainData[chain] = {
+        defiValue: chainInfo.defiValue,
+        positionCount: chainInfo.defiPositions.length + (chainInfo.portfolioDefi?.length || 0)
+      };
+
+      // Process Moralis DeFi positions
+      for (const position of chainInfo.defiPositions) {
+        positions.push({
+          source: 'moralis',
+          chain: chain,
+          protocol: position.protocol_name || position.protocol_id || 'unknown',
+          totalValue: position.total_usd_value || 0,
+          type: 'defi',
+          positions: position.position_details || [],
+          url: position.protocol_url,
+          logo: position.protocol_logo
+        });
+      }
+
+      // Process portfolio DeFi positions (Ethereum only for now)
+      if (chainInfo.portfolioDefi) {
+        for (const position of chainInfo.portfolioDefi) {
+          positions.push({
+            source: 'moralis',
+            chain: chain,
+            protocol: position.protocol_name || 'unknown',
+            totalValue: position.total_usd_value || 0,
+            type: 'portfolio_defi',
+            positions: position.position_details || []
+          });
+        }
+      }
     }
 
-    // Process Moralis DeFi positions
-    for (const position of moralisData.defiPositions) {
-      positions.push({
-        source: 'moralis',
-        protocol: position.protocol_name || 'unknown',
-        totalValue: position.total_usd_value,
-        positions: position.position_details || []
-      });
-      totalValue += position.total_usd_value;
-    }
-
-    // Group by protocol
+    // Group by protocol across all chains
     const protocolGroups = positions.reduce((groups, position) => {
       const protocol = position.protocol.toLowerCase();
       if (!groups[protocol]) {
-        groups[protocol] = [];
+        groups[protocol] = {
+          positions: [],
+          totalValue: 0,
+          chains: new Set()
+        };
       }
-      groups[protocol].push(position);
+      groups[protocol].positions.push(position);
+      groups[protocol].totalValue += position.totalValue || 0;
+      groups[protocol].chains.add(position.chain);
       return groups;
-    }, {} as { [key: string]: any[] });
+    }, {} as { [key: string]: any });
+
+    // Convert chains Sets to arrays for JSON serialization
+    Object.keys(protocolGroups).forEach(protocol => {
+      protocolGroups[protocol].chains = Array.from(protocolGroups[protocol].chains);
+    });
 
     return {
       totalValue,
       positionCount: positions.length,
       positions,
       protocolCount: Object.keys(protocolGroups).length,
-      protocolGroups
+      protocolGroups,
+      chainData,
+      multiChain: {
+        activeChains: moralisData.combined.chainsWithDefi,
+        totalChains: moralisData.combined.chainsWithDefi.length,
+        crossChainExposure: Object.keys(protocolGroups).filter(protocol => 
+          protocolGroups[protocol].chains.length > 1
+        ).length > 0
+      }
     };
   }
 
@@ -326,35 +446,50 @@ Respond with valid JSON only:
   }
 
   /**
-   * Build prompt for GPT pool analysis
+   * Build prompt for GPT pool analysis (multi-chain)
    */
   private buildPoolAnalysisPrompt(data: any): string {
-    const { totalValue, positionCount, protocolCount, protocolGroups, positions } = data;
+    const { totalValue, positionCount, protocolCount, protocolGroups, positions, chainData, multiChain } = data;
     
-    let prompt = `DEFI POOL POSITION ANALYSIS REQUEST
+    let prompt = `MULTI-CHAIN DEFI POOL POSITION ANALYSIS REQUEST
 
 OVERVIEW:
 - Total DeFi Value: $${totalValue.toLocaleString()}
 - Number of Positions: ${positionCount}
 - Protocols Used: ${protocolCount}
+- Active Chains: ${multiChain.activeChains.join(', ').toUpperCase()}
+- Cross-Chain Exposure: ${multiChain.crossChainExposure ? 'Yes' : 'No'}
 
-POSITIONS BY PROTOCOL:`;
+MULTI-CHAIN BREAKDOWN:`;
 
-    for (const [protocol, protocolPositions] of Object.entries(protocolGroups)) {
-      const totalProtocolValue = (protocolPositions as any[]).reduce((sum, p) => sum + (p.value || p.totalValue || 0), 0);
-      prompt += `\n- ${protocol.toUpperCase()}: ${(protocolPositions as any[]).length} position(s), $${totalProtocolValue.toLocaleString()}`;
+    for (const [chain, data] of Object.entries(chainData)) {
+      const chainInfo = data as any;
+      prompt += `\n- ${chain.toUpperCase()}: $${chainInfo.defiValue.toLocaleString()} (${chainInfo.positionCount} positions)`;
+    }
+
+    prompt += `\n\nPOSITIONS BY PROTOCOL:`;
+
+    for (const [protocol, protocolInfo] of Object.entries(protocolGroups)) {
+      const info = protocolInfo as any;
+      prompt += `\n- ${protocol.toUpperCase()}: ${info.positions.length} position(s), $${info.totalValue.toLocaleString()}`;
+      if (info.chains.length > 1) {
+        prompt += ` [Multi-chain: ${info.chains.join(', ')}]`;
+      } else {
+        prompt += ` [${info.chains[0]?.toUpperCase()}]`;
+      }
     }
 
     prompt += `\n\nDETAILED POSITIONS:`;
     
-    for (const position of positions.slice(0, 10)) { // Limit to top 10
-      prompt += `\n- Protocol: ${position.protocol}`;
-      prompt += `\n  Value: $${(position.value || position.totalValue || 0).toLocaleString()}`;
+    for (const position of positions.slice(0, 12)) { // Show more positions for multi-chain
+      prompt += `\n- Protocol: ${position.protocol} [${position.chain?.toUpperCase()}]`;
+      prompt += `\n  Value: $${(position.totalValue || 0).toLocaleString()}`;
       prompt += `\n  Type: ${position.type || 'unknown'}`;
-      if (position.asset) prompt += `\n  Asset: ${position.asset}`;
-      if (position.tokens && position.tokens.length > 0) {
-        prompt += `\n  Tokens: ${position.tokens.map((t: any) => t.symbol || t.asset).join(', ')}`;
+      if (position.positions && position.positions.length > 0) {
+        const tokens = position.positions.map((p: any) => p.symbol || 'Unknown').slice(0, 3);
+        prompt += `\n  Underlying Tokens: ${tokens.join(', ')}`;
       }
+      if (position.url) prompt += `\n  URL: ${position.url}`;
       prompt += '\n';
     }
 
@@ -385,15 +520,28 @@ POSITIONS BY PROTOCOL:`;
       prompt += `\nUNKNOWN PROTOCOLS (High Risk): ${unknownProtocols.join(', ')}`;
     }
 
-    prompt += `\n\nPlease analyze this DeFi portfolio focusing on:
-1. Protocol security and reputation assessment
-2. Impermanent loss risk from liquidity positions
-3. Smart contract risk exposure
-4. Diversification across protocols
-5. Yield sustainability and red flags
-6. Overall DeFi risk profile
+    // Multi-chain specific analysis
+    if (multiChain.totalChains > 1) {
+      prompt += `\n\nMULTI-CHAIN RISK FACTORS:`;
+      prompt += `\n- Bridge Risk: Exposure to cross-chain bridges`;
+      prompt += `\n- Network Risk: Different security models across chains`;
+      prompt += `\n- Liquidity Fragmentation: Assets spread across multiple chains`;
+      if (multiChain.crossChainExposure) {
+        prompt += `\n- Cross-Chain Protocols: Same protocols used on multiple chains`;
+      }
+    }
 
-Provide specific recommendations for risk mitigation and position optimization.`;
+    prompt += `\n\nPlease analyze this MULTI-CHAIN DeFi portfolio focusing on:
+1. Protocol security and reputation assessment across all chains
+2. Impermanent loss risk from liquidity positions
+3. Smart contract risk exposure (including multi-chain risks)
+4. Diversification across protocols and chains
+5. Cross-chain bridge risks and vulnerabilities
+6. Chain-specific risks (Ethereum gas, L2 centralization, etc.)
+7. Yield sustainability and red flags
+8. Overall multi-chain DeFi risk profile
+
+Provide specific recommendations for risk mitigation and position optimization across all active chains.`;
 
     return prompt;
   }
