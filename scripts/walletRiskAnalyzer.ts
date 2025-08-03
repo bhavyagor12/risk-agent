@@ -183,9 +183,7 @@ export class WalletRiskAnalyzer {
         // Base data
         baseTokenBalances, baseNativeBalance, baseDefiPositions,
         // Polygon data
-        polygonTokenBalances, polygonNativeBalance, polygonDefiPositions,
-        // Multi-chain net worth (single call for all chains)
-        multiChainNetWorth
+        polygonTokenBalances, polygonNativeBalance, polygonDefiPositions
       ] = await Promise.all([
         // Ethereum
         this.moralisAPI.getWalletPortfolio(address, 'eth').catch(() => ({ totalValue: 0, nativeBalance: { balance: '0', balance_formatted: '0' }, tokenBalances: [], nftBalances: [], defiPositions: [], netWorth: { total_networth_usd: '0', chains: [] }, profitLoss: {} })),
@@ -201,10 +199,11 @@ export class WalletRiskAnalyzer {
         // Polygon
         this.moralisAPI.getTokenBalances(address, 'polygon').catch(() => []),
         this.moralisAPI.getNativeBalance(address, 'polygon').catch(() => ({ balance: '0', balance_formatted: '0' })),
-        this.moralisAPI.getDefiPositions(address, 'polygon').catch(() => []),
-        // Multi-chain net worth (single API call - gets all chains by default)
-        this.moralisAPI.getNetWorth(address).catch(() => ({ total_networth_usd: '0', chains: [] }))
+        this.moralisAPI.getDefiPositions(address, 'polygon').catch(() => [])
       ]);
+
+      // Use net worth data from ethPortfolio instead of making a separate call
+      const multiChainNetWorth = ethPortfolio.netWorth;
 
       // Extract chain-specific net worth data from multi-chain response
       const ethNetWorth = {

@@ -31,7 +31,14 @@ interface WalletData {
           defiPositions: any[];
           netWorth: {
             total_networth_usd: string;
-            chains: any[];
+            chains: Array<{
+              chain: string;
+              native_balance: string;
+              native_balance_formatted: string;
+              native_balance_usd: string;
+              token_balance_usd: string;
+              networth_usd: string;
+            }>;
           };
           profitLoss: {
             total_count_of_trades: number;
@@ -40,8 +47,22 @@ interface WalletData {
             total_realized_profit_percentage: number;
             total_buys: number;
             total_sells: number;
+            total_sold_volume_usd: string;
+            total_bought_volume_usd: string;
           };
         };
+        net_worth: {
+          total_networth_usd: string;
+          chains: Array<{
+            chain: string;
+            native_balance: string;
+            native_balance_formatted: string;
+            native_balance_usd: string;
+            token_balance_usd: string;
+            networth_usd: string;
+          }>;
+        };
+        transactions: any[];
       };
     };
   };
@@ -51,18 +72,21 @@ interface WalletData {
       risk_score: number;
       key_findings: string[];
       recommendations: string[];
+      processed_at: string;
     };
     assets: {
       gpt_analysis: string;
       risk_score: number;
       key_findings: string[];
       recommendations: string[];
+      processed_at: string;
     };
     protocols: {
       gpt_analysis: string;
       risk_score: number;
       key_findings: string[];
       recommendations: string[];
+      processed_at: string;
     };
   };
   final_analysis: {
@@ -82,6 +106,7 @@ interface WalletData {
       crossChainRisks: string[];
       chainSpecificRisks: Record<string, string[]>;
     };
+    processed_at: string;
   };
 }
 

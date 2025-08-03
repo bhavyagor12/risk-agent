@@ -616,7 +616,7 @@ After completing your analysis (including any web searches), respond with valid 
     let prompt = `MULTI-CHAIN WALLET ASSET ANALYSIS REQUEST
 
 PORTFOLIO OVERVIEW:
-- Total Portfolio Value: $${totalPortfolioValue.toLocaleString()}
+- Total Portfolio Value: $${(totalPortfolioValue || 0).toLocaleString()}
 - Number of Assets: ${assetCount}
 - Active Chains: ${multiChain.activeChains.join(', ').toUpperCase()}
 - Total Chains: ${multiChain.totalChains}`;
@@ -630,7 +630,7 @@ PORTFOLIO OVERVIEW:
     prompt += `\n\nMULTI-CHAIN BREAKDOWN:`;
     for (const [chain, data] of Object.entries(chainData)) {
       const chainInfo = data as any;
-      prompt += `\n- ${chain.toUpperCase()}: $${chainInfo.netWorth.toLocaleString()} (${chainInfo.tokenCount} tokens, ${chainInfo.nativeBalance.toFixed(4)} native)`;
+      prompt += `\n- ${chain.toUpperCase()}: $${(chainInfo.netWorth || 0).toLocaleString()} (${chainInfo.tokenCount} tokens, ${(chainInfo.nativeBalance || 0).toFixed(4)} native)`;
     }
 
     prompt += `\n\nTOP ASSETS BY VALUE:`;
@@ -638,7 +638,7 @@ PORTFOLIO OVERVIEW:
     // Show top 15 assets by value with chain info
     const topAssets = assets.slice(0, 15);
     for (const asset of topAssets) {
-      prompt += `\n- ${asset.symbol} [${asset.chain?.toUpperCase() || 'Unknown'}]: $${asset.valueUSD.toLocaleString()} (${asset.percentage.toFixed(1)}%)`;
+      prompt += `\n- ${asset.symbol} [${asset.chain?.toUpperCase() || 'Unknown'}]: $${(asset.valueUSD || 0).toLocaleString()} (${(asset.percentage || 0).toFixed(1)}%)`;
       if (asset.type === 'defi') prompt += ` [DeFi: ${asset.protocol}]`;
       if (asset.type === 'native') prompt += ` [Native Token]`;
       if (asset.possibleSpam) prompt += ` [⚠️ POTENTIAL SPAM]`;
@@ -703,7 +703,7 @@ PORTFOLIO OVERVIEW:
     if (defiAssets.length > 0) {
       prompt += `\n\nDEFI POSITIONS:`;
       for (const defi of defiAssets.slice(0, 5)) {
-        prompt += `\n- ${defi.protocol}: $${defi.valueUSD.toLocaleString()}`;
+        prompt += `\n- ${defi.protocol}: $${(defi.valueUSD || 0).toLocaleString()}`;
       }
     }
 
@@ -768,7 +768,7 @@ Provide specific actionable recommendations for risk mitigation across all activ
     riskScore = Math.max(0, Math.min(100, riskScore));
 
     return {
-      gpt_analysis: `Automated analysis of wallet assets. Portfolio contains ${assetCount} assets worth $${totalPortfolioValue.toLocaleString()}. ${keyFindings.length > 0 ? keyFindings.join('. ') + '.' : 'No major issues detected.'}`,
+      gpt_analysis: `Automated analysis of wallet assets. Portfolio contains ${assetCount} assets worth $${(totalPortfolioValue || 0).toLocaleString()}. ${keyFindings.length > 0 ? keyFindings.join('. ') + '.' : 'No major issues detected.'}`,
       risk_score: riskScore,
       key_findings: keyFindings,
       recommendations: recommendations

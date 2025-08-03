@@ -135,8 +135,13 @@ class ProtocolAnalyzer {
       if (tx.to_address && tx.to_address !== tx.from_address) {
         const interaction = this.categorizeTransaction(tx);
         if (interaction) {
-          // Add transaction value context
-          const txValue = parseFloat(tx.value_formatted || '0') + parseFloat(tx.gas_price_formatted || '0');
+          // Add transaction value context (convert wei to ETH and estimate USD)
+          const valueInWei = parseFloat(tx.value || '0');
+          const valueInEth = valueInWei / 1e18;
+          // Rough ETH price estimate - in a real system, you'd get current price
+          const ethPriceUsd = 2500; // Approximate ETH price
+          const txValue = valueInEth * ethPriceUsd;
+          
           const enhancedInteraction = {
             ...interaction,
             value_usd: txValue,
