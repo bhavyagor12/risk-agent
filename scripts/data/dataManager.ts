@@ -73,7 +73,7 @@ export interface WalletAnalysisData {
 export class DataManager {
   private dataDir: string;
 
-  constructor(dataDir = './data/wallets') {
+  constructor(dataDir = './public/data/wallets') {
     this.dataDir = path.resolve(dataDir);
     this.ensureDataDirectory();
   }

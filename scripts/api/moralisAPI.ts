@@ -209,13 +209,14 @@ export class MoralisAPI {
   }
 
   /**
-   * Get wallet's net worth (returns all chains by default)
+   * Get wallet's net worth across multiple chains
    */
-  async getNetWorth(address: string): Promise<{ total_networth_usd: string; chains: any[] }> {
-    console.log(`💎 Fetching net worth for ${address} from Moralis...`);
+  async getNetWorth(address: string, chains: string[] = ['eth', 'polygon', 'arbitrum', 'base', 'optimism', 'linea']): Promise<{ total_networth_usd: string; chains: any[] }> {
+    console.log(`💎 Fetching net worth for ${address} from Moralis across chains: ${chains.join(', ')}...`);
 
     try {
       const data = await this.makeRequest(`/wallets/${address}/net-worth`, {
+        chains: chains,
         exclude_spam: true,
         exclude_unverified_contracts: true,
         max_token_inactivity: 1,
